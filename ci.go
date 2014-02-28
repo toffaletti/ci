@@ -14,6 +14,11 @@ func handleEvent(event string, body json.RawMessage) {
 
 func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		data, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			log.Printf("error reading body %v", err)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 
 		event := r.Header.Get("X-Github-Event")
@@ -24,11 +29,6 @@ func main() {
 			return
 		default:
 			raw := json.RawMessage{}
-			data, err := ioutil.ReadAll(r.Body)
-			if err != nil {
-				log.Printf("error reading body %v", err)
-				return
-			}
 			err = raw.UnmarshalJSON(data)
 			if err != nil {
 				panic(err)
