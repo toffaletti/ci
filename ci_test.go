@@ -50,14 +50,15 @@ func TestExecError(t *testing.T) {
 func TestVetOutParse(t *testing.T) {
 	out := "search.go:241: range variable domain enclosed by function\n" +
 		"ci.go:34:2: struct field tag `json\"owner\"` not compatible with reflect.StructTag.Get\n"
-	msgs := parseVetOut(bytes.NewReader([]byte(out)))
+	msgs := parseVetOut("", bytes.NewReader([]byte(out)))
 	if len(msgs) != 2 {
 		t.Error("expecting 2 messages")
 	}
-	if msgs[0].Line != 241 {
-		t.Errorf("expecting line 241")
+	// expect lineNumber+1 to put comment under the line in github ui
+	if msgs[0].Line != 242 {
+		t.Errorf("expecting line 242")
 	}
-	if msgs[1].Line != 34 {
-		t.Errorf("expecting line 34")
+	if msgs[1].Line != 35 {
+		t.Errorf("expecting line 35")
 	}
 }
