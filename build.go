@@ -39,9 +39,10 @@ type BuildEnv struct {
 
 func NewBuildEnv(user string, pre *PullRequestEvent) *BuildEnv {
 	u, _ := url.Parse(pre.PullRequest.Base.Repo.CloneUrl)
+	sharedGoPath := filepath.Join("/tmp", "ci", "go")
 	dir := filepath.Join("/tmp", "ci", pre.PullRequest.Head.Sha)
 	return &BuildEnv{
-		Environment: NewEnvironment(dir),
+		Environment: NewEnvironment(sharedGoPath, dir),
 		pre:         pre,
 		pr:          &pre.PullRequest,
 		fileSet:     token.NewFileSet(),
@@ -58,10 +59,12 @@ func (e *BuildEnv) Build() {
 	log.Printf("want to commit to %v from %v", e.pr.Base.Label, e.pr.Head.Label)
 	dir := filepath.Dir(e.root)
 	// clean up any existing checkout at this path
-	os.RemoveAll(e.Path)
+	os.RemoveAll(e.GoPaths[1])
 	err := os.MkdirAll(dir, os.ModePerm)
 	log.Printf("cloning to %v", dir)
-	c := e.Command("git", "clone", "--quiet", "-b", e.pr.Head.Ref, "--single-branch", e.pr.Head.Repo.CloneUrl)
+	//c := e.Command("git", "clone", "--quiet", "-b", e.pr.Head.Ref, "--single-branch", e.pr.Head.Repo.CloneUrl)
+	// XXX: had to stop doing --single-branch because go get -u runs 'git checkout master'
+	c := e.Command("git", "clone", "--quiet", "-b", e.pr.Head.Ref, e.pr.Head.Repo.CloneUrl)
 	c.Dir = dir
 	err = c.Run()
 	if err != nil {
@@ -73,9 +76,9 @@ func (e *BuildEnv) Build() {
 		log.Printf("error: %v", err)
 	}
 	// make file comment paths relative to repo root
-	for _, m := range msgs {
+	for i, m := range msgs {
 		rel, _ := filepath.Rel(e.root, m.File)
-		m.File = rel
+		msgs[i].File = rel
 	}
 	e.reports = msgs
 }
@@ -115,7 +118,7 @@ func (e *BuildEnv) Report() {
 		}
 	}
 	if allOk {
-		os.RemoveAll(e.Path)
+		os.RemoveAll(e.GoPaths[1])
 		log.Printf("all files ok")
 	}
 }
@@ -156,7 +159,7 @@ func (e *BuildEnv) processFile(path string) (*codeMessage, error) {
 		}
 		return &codeMessage{
 			File: filepath.Base(path),
-			Line: lineNumber,
+			Line: lineNumber + 1,
 			Msg:  "gofmt",
 		}, nil
 	}
@@ -218,6 +221,60 @@ func makeTree(dir string) (dirs map[string][]string, err error) {
 	return
 }
 
+func (e *BuildEnv) build(dirs map[string][]string) (msgs []codeMessage, buildPass bool) {
+	for dir, _ := range dirs {
+		c := e.Command("go", "get", "-d", "-u", "-t")
+		c.Dir = dir
+		out, err := c.CombinedOutput()
+		if err != nil {
+			log.Printf("error running go get: %s", string(out))
+		}
+	}
+	// after running go get -u we will be on branch master
+	// need to checkout the right branch
+	c := e.Command("git", "checkout", e.pr.Head.Ref)
+	c.Dir = filepath.Join(filepath.Dir(e.root), e.pr.Head.Repo.Name)
+	out, err := c.CombinedOutput()
+	if err != nil {
+		log.Printf("error checking out branch: %v", string(out))
+	}
+
+	// go build packages
+	buildPass = true
+	for dir, _ := range dirs {
+		c := e.Command("go", "build")
+		c.Dir = dir
+		out, err := c.CombinedOutput()
+		if err != nil {
+			log.Printf("error running go build: %v", err)
+			buildPass = false
+			splits := strings.SplitN(string(out), "\n", 3)
+			if len(splits) == 3 {
+				//pkgPath := splits[0][2:]
+				splits := strings.SplitN(splits[1], ": ", 2)
+				if len(splits) == 2 {
+					errMsg := splits[1]
+					splits = strings.SplitN(splits[0], ":", 2)
+					if len(splits) == 2 {
+						lineNumber, _ := strconv.Atoi(splits[1])
+						msgs = append(msgs, codeMessage{
+							Line: lineNumber + 1,
+							File: filepath.Join(dir, splits[0]),
+							Msg:  errMsg,
+						})
+					}
+				}
+			}
+		}
+		// TODO: parse output to go build and comment on first line that fails to build
+		//msgs = append(msgs, codeMessage{
+		//	Msg: string(out),
+		//	Ok:  err == nil,
+		//})
+	}
+	return
+}
+
 func (e *BuildEnv) processDir(path string) (msgs []codeMessage, err error) {
 	dirs, err := makeTree(path)
 	if err != nil {
@@ -229,10 +286,10 @@ func (e *BuildEnv) processDir(path string) (msgs []codeMessage, err error) {
 		c.Dir = dir
 		out, err := c.CombinedOutput()
 		if err != nil {
-			return nil, fmt.Errorf("error running go vet %v", err)
+			//return nil, fmt.Errorf("error running go vet %v", err)
 		}
 		if len(out) > 0 {
-			msgs = parseVetOut(bytes.NewReader(out))
+			msgs = parseVetOut(dir, bytes.NewReader(out))
 		}
 	}
 
@@ -249,30 +306,25 @@ func (e *BuildEnv) processDir(path string) (msgs []codeMessage, err error) {
 		}
 	}
 
-	// if code passed vetting, try to run tests
+	// if code passed vetting, try to build and run tests
 	if len(msgs) == 0 {
-		for dir, _ := range dirs {
-			c := e.Command("go", "get", "-d", "-t")
-			c.Dir = dir
-			err = c.Run()
-			if err != nil {
-				log.Printf("error running go get: %v", err)
-			}
-		}
+		m, buildPass := e.build(dirs)
+		msgs = append(msgs, m...)
 
-		for dir, _ := range dirs {
-			c := e.Command("go", "test", "-cover")
-			c.Dir = dir
-			out, err := c.CombinedOutput()
-			if err != nil {
-				log.Printf("error running go test: %v", err)
+		// go test packages
+		if buildPass {
+			for dir, _ := range dirs {
+				c := e.Command("go", "test", "-cover")
+				c.Dir = dir
+				out, err := c.CombinedOutput()
+				if err != nil {
+					log.Printf("error running go test: %v", err)
+				}
+				msgs = append(msgs, codeMessage{
+					Msg: string(out),
+					Ok:  err == nil,
+				})
 			}
-			msgs = append(msgs, codeMessage{
-				File: "",
-				Line: 0,
-				Msg:  string(out),
-				Ok:   err == nil,
-			})
 		}
 	}
 	return msgs, nil
@@ -325,7 +377,7 @@ func issueComment(pre *PullRequestEvent, commentBody string) error {
 	return err
 }
 
-func parseVetOut(r io.Reader) (msgs []codeMessage) {
+func parseVetOut(dir string, r io.Reader) (msgs []codeMessage) {
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -341,8 +393,8 @@ func parseVetOut(r io.Reader) (msgs []codeMessage) {
 		filename := splits[0]
 		lineNumber, _ := strconv.Atoi(splits[1])
 		msgs = append(msgs, codeMessage{
-			File: filepath.Join(filename),
-			Line: lineNumber,
+			File: filepath.Join(dir, filename),
+			Line: lineNumber + 1,
 			Msg:  msg,
 		})
 	}

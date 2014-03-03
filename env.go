@@ -1,17 +1,21 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
 type Environment struct {
-	Path string
+	GoPaths []string
 }
 
-func NewEnvironment(path string) *Environment {
-	return &Environment{path}
+func NewEnvironment(paths ...string) *Environment {
+	return &Environment{
+		GoPaths: paths,
+	}
 }
 
 func (e *Environment) Command(name string, arg ...string) (cmd *exec.Cmd) {
@@ -24,6 +28,6 @@ func (e *Environment) Command(name string, arg ...string) (cmd *exec.Cmd) {
 		}
 		cmd.Env = append(cmd.Env, env)
 	}
-	cmd.Env = append(cmd.Env, "GOPATH="+e.Path)
+	cmd.Env = append(cmd.Env, "GOPATH="+strings.Join(e.GoPaths, fmt.Sprintf("%c", filepath.ListSeparator)))
 	return
 }
