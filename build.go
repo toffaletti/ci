@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/golang/glog"
 	"github.com/google/go-github/github"
 	"go/ast"
 	"go/parser"
@@ -12,7 +13,6 @@ import (
 	"go/token"
 	"io"
 	"io/ioutil"
-	"log"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -60,31 +60,32 @@ func NewTestEnv(path string) *BuildEnv {
 }
 
 // Build checks out the code and runs through all the stages of vetting the code
-func (e *BuildEnv) Clone() {
+func (e *BuildEnv) Clone() (err error) {
 	// TODO: git diff --name-status pr.Base.Sha pr.Head.Sha
 	// to get list of changed files only
-	log.Printf("pr: %v", e.pr.Url)
-	log.Printf("want to commit to %v from %v", e.pr.Base.Label, e.pr.Head.Label)
+	if glog.V(1) {
+		glog.Infof("pr: %v", e.pr.Url)
+		glog.Infof("want to commit to %v from %v", e.pr.Base.Label, e.pr.Head.Label)
+	}
 	dir := filepath.Dir(e.root)
 	// clean up any existing checkout at this path
 	os.RemoveAll(e.GoPaths[1])
-	err := os.MkdirAll(dir, os.ModePerm)
-	log.Printf("cloning to %v", dir)
+	err = os.MkdirAll(dir, os.ModePerm)
+	// TODO: check err for MkdirAll
+	glog.V(1).Infof("cloning to %v", dir)
 	//c := e.Command("git", "clone", "--quiet", "-b", e.pr.Head.Ref, "--single-branch", e.pr.Head.Repo.CloneUrl)
 	// XXX: had to stop doing --single-branch because go get -u runs 'git checkout master'
 	c := e.Command("git", "clone", "--quiet", "-b", e.pr.Head.Ref, e.pr.Head.Repo.CloneUrl)
 	c.Dir = dir
 	err = c.Run()
 	if err != nil {
-		log.Printf("error cloning: %v", err)
+		glog.V(1).Infof("error cloning: %v", err)
 	}
+	return err
 }
 
-func (e *BuildEnv) Check() {
+func (e *BuildEnv) Check() (err error) {
 	msgs, err := e.processDir(e.root)
-	if err != nil {
-		log.Printf("error: %v", err)
-	}
 	// make file comment paths relative to repo root
 	for i, m := range msgs {
 		rel, _ := filepath.Rel(e.root, m.File)
@@ -92,37 +93,42 @@ func (e *BuildEnv) Check() {
 		msgs[i].Msg = strings.Replace(m.Msg, e.root, "", -1)
 	}
 	e.reports = msgs
-
+	if err != nil {
+		glog.V(1).Infof("error: %v", err)
+	}
+	return err
 }
 
 // CleanComments removes any outdated issue comments
 func (e *BuildEnv) CleanComments() {
 	comments, _, err := ghClient.Issues.ListComments(e.pr.Base.Repo.Owner.Login, e.pr.Base.Repo.Name, e.pre.Number, nil)
 	if err != nil {
-		log.Printf("error listing comments: %v", err)
+		glog.V(1).Infof("error listing comments: %v", err)
 	}
 	for _, comment := range comments {
 		if *comment.User.Login == e.user {
 			_, err := ghClient.Issues.DeleteComment(e.pr.Base.Repo.Owner.Login, e.pr.Base.Repo.Name, *comment.ID)
 			if err != nil {
-				log.Printf("error deleting comments: %v", err)
+				glog.V(1).Infof("error deleting comments: %v", err)
 			}
 		}
 	}
 }
 
 // Report makes comments on pull request
-func (e *BuildEnv) Report() {
-	if len(e.reports) > 0 {
-		log.Printf("reports: %v", e.reports)
-		err := codeComment(e.pre, e.reports)
-		if err != nil {
-			log.Printf("error commenting: %v", err)
-		}
+func (e *BuildEnv) Report() (err error) {
+	if len(e.reports) == 0 {
+		return
 	}
+	glog.V(1).Infof("reports: %v", e.reports)
+	err = codeComment(e.pre, e.reports)
+	if err != nil {
+		glog.V(1).Infof("error commenting: %v", err)
+	}
+	return
 }
 
-func (e *BuildEnv) Clean() {
+func (e *BuildEnv) Clean() error {
 	reports := e.reports
 	e.reports = nil
 	allOk := true
@@ -134,7 +140,7 @@ func (e *BuildEnv) Clean() {
 	}
 	if allOk {
 		os.RemoveAll(e.GoPaths[1])
-		log.Printf("all files ok")
+		glog.V(1).Info("all files ok")
 	} else if e.pre.PullRequest.State != "closed" {
 		// close the pull request
 		closed := "closed"
@@ -145,9 +151,11 @@ func (e *BuildEnv) Clean() {
 		}
 		_, _, err := ghClient.PullRequests.Edit(e.pr.Base.Repo.Owner.Login, e.pr.Base.Repo.Name, e.pre.Number, pr)
 		if err != nil {
-			log.Printf("error closing pull request: %v", err)
+			glog.V(1).Infof("error closing pull request: %v", err)
 		}
+		return err
 	}
+	return nil
 }
 
 func (e *BuildEnv) processFile(path string) (*codeMessage, error) {
@@ -256,7 +264,7 @@ func (e *BuildEnv) build(dirs map[string][]string) (msgs []codeMessage, buildPas
 			c.Dir = dir
 			out, err := c.CombinedOutput()
 			if err != nil {
-				log.Printf("error running go get: %s", string(out))
+				glog.V(1).Infof("error running go get: %s", string(out))
 			}
 		}
 		// after running go get -u we will be on branch master
@@ -265,7 +273,7 @@ func (e *BuildEnv) build(dirs map[string][]string) (msgs []codeMessage, buildPas
 		c.Dir = filepath.Join(filepath.Dir(e.root), e.pr.Head.Repo.Name)
 		out, err := c.CombinedOutput()
 		if err != nil {
-			log.Printf("error checking out branch: %v", string(out))
+			glog.V(1).Infof("error checking out branch: %v", string(out))
 		}
 	}
 
@@ -276,7 +284,7 @@ func (e *BuildEnv) build(dirs map[string][]string) (msgs []codeMessage, buildPas
 		c.Dir = dir
 		out, err := c.CombinedOutput()
 		if err != nil {
-			log.Printf("error running go build: %v", err)
+			glog.V(1).Infof("error running go build: %v", err)
 			buildPass = false
 			msgs = append(msgs, parseBuildOut(dir, string(out))...)
 		}
@@ -330,7 +338,7 @@ func (e *BuildEnv) processDir(path string) (msgs []codeMessage, err error) {
 			c.Dir = dir
 			out, err := c.CombinedOutput()
 			if err != nil {
-				log.Printf("error running go test: %v", err)
+				glog.V(1).Infof("error running go test: %v", err)
 			}
 			msgs = append(msgs, codeMessage{
 				Msg: string(out),
