@@ -51,8 +51,16 @@ func NewBuildEnv(user string, pre *PullRequestEvent) *BuildEnv {
 	}
 }
 
+func NewTestEnv(path string) *BuildEnv {
+	return &BuildEnv{
+		Environment: NewEnvironment(path),
+		fileSet:     token.NewFileSet(),
+		root:        path,
+	}
+}
+
 // Build checks out the code and runs through all the stages of vetting the code
-func (e *BuildEnv) Build() {
+func (e *BuildEnv) Clone() {
 	// TODO: git diff --name-status pr.Base.Sha pr.Head.Sha
 	// to get list of changed files only
 	log.Printf("pr: %v", e.pr.Url)
@@ -70,7 +78,9 @@ func (e *BuildEnv) Build() {
 	if err != nil {
 		log.Printf("error cloning: %v", err)
 	}
-	dir = filepath.Join(dir, e.pr.Head.Repo.Name)
+}
+
+func (e *BuildEnv) Check() {
 	msgs, err := e.processDir(e.root)
 	if err != nil {
 		log.Printf("error: %v", err)
@@ -79,8 +89,10 @@ func (e *BuildEnv) Build() {
 	for i, m := range msgs {
 		rel, _ := filepath.Rel(e.root, m.File)
 		msgs[i].File = rel
+		msgs[i].Msg = strings.Replace(m.Msg, e.root, "", -1)
 	}
 	e.reports = msgs
+
 }
 
 // CleanComments removes any outdated issue comments
@@ -108,6 +120,9 @@ func (e *BuildEnv) Report() {
 			log.Printf("error commenting: %v", err)
 		}
 	}
+}
+
+func (e *BuildEnv) Clean() {
 	reports := e.reports
 	e.reports = nil
 	allOk := true
@@ -164,15 +179,16 @@ func (e *BuildEnv) processFile(path string) (*codeMessage, error) {
 		// formatting changed, save file and run diff on it to find the first changed block
 		// use the line number from the diff to comment on the pull request
 		ioutil.WriteFile(path+".fmt", res, os.ModePerm)
+		defer os.Remove(path + ".fmt")
 		lineNumber, err := e.findFirstChange(path, path+".fmt")
 		// TODO: show correct fmt?
 		if err != nil {
 			return nil, fmt.Errorf("%v needs gofmt", filepath.Base(path))
 		}
 		return &codeMessage{
-			File: filepath.Base(path),
-			Line: lineNumber + 1,
-			Msg:  "gofmt",
+			File: path,
+			Line: lineNumber,
+			Msg:  "needs gofmt",
 		}, nil
 	}
 	return nil, nil
@@ -234,21 +250,23 @@ func makeTree(dir string) (dirs map[string][]string, err error) {
 }
 
 func (e *BuildEnv) build(dirs map[string][]string) (msgs []codeMessage, buildPass bool) {
-	for dir, _ := range dirs {
-		c := e.Command("go", "get", "-d", "-u", "-t")
-		c.Dir = dir
+	if e.pr != nil {
+		for dir, _ := range dirs {
+			c := e.Command("go", "get", "-d", "-u", "-t")
+			c.Dir = dir
+			out, err := c.CombinedOutput()
+			if err != nil {
+				log.Printf("error running go get: %s", string(out))
+			}
+		}
+		// after running go get -u we will be on branch master
+		// need to checkout the right branch
+		c := e.Command("git", "checkout", e.pr.Head.Ref)
+		c.Dir = filepath.Join(filepath.Dir(e.root), e.pr.Head.Repo.Name)
 		out, err := c.CombinedOutput()
 		if err != nil {
-			log.Printf("error running go get: %s", string(out))
+			log.Printf("error checking out branch: %v", string(out))
 		}
-	}
-	// after running go get -u we will be on branch master
-	// need to checkout the right branch
-	c := e.Command("git", "checkout", e.pr.Head.Ref)
-	c.Dir = filepath.Join(filepath.Dir(e.root), e.pr.Head.Repo.Name)
-	out, err := c.CombinedOutput()
-	if err != nil {
-		log.Printf("error checking out branch: %v", string(out))
 	}
 
 	// go build packages
@@ -302,25 +320,22 @@ func (e *BuildEnv) processDir(path string) (msgs []codeMessage, err error) {
 		}
 	}
 
-	// if code passed vetting, try to build and run tests
-	if len(msgs) == 0 {
-		m, buildPass := e.build(dirs)
-		msgs = append(msgs, m...)
+	m, buildPass := e.build(dirs)
+	msgs = append(msgs, m...)
 
-		// go test packages
-		if buildPass {
-			for dir, _ := range dirs {
-				c := e.Command("go", "test", "-cover")
-				c.Dir = dir
-				out, err := c.CombinedOutput()
-				if err != nil {
-					log.Printf("error running go test: %v", err)
-				}
-				msgs = append(msgs, codeMessage{
-					Msg: string(out),
-					Ok:  err == nil,
-				})
+	// go test packages
+	if buildPass {
+		for dir, _ := range dirs {
+			c := e.Command("go", "test", "-cover")
+			c.Dir = dir
+			out, err := c.CombinedOutput()
+			if err != nil {
+				log.Printf("error running go test: %v", err)
 			}
+			msgs = append(msgs, codeMessage{
+				Msg: string(out),
+				Ok:  err == nil,
+			})
 		}
 	}
 	return msgs, nil
@@ -371,7 +386,7 @@ func parseBuildOut(dir string, out string) (msgs []codeMessage) {
 	//		if len(splits) == 2 {
 	//			lineNumber, _ := strconv.Atoi(splits[1])
 	//			msgs = append(msgs, codeMessage{
-	//				Line: lineNumber + 1,
+	//				Line: lineNumber,
 	//				File: filepath.Join(dir, splits[0]),
 	//				Msg:  errMsg,
 	//			})
@@ -380,7 +395,7 @@ func parseBuildOut(dir string, out string) (msgs []codeMessage) {
 	//}
 
 	msgs = append(msgs, codeMessage{
-		Msg: strings.Replace(out, dir, "", -1),
+		Msg: out,
 	})
 	return
 }
@@ -402,7 +417,7 @@ func parseVetOut(dir string, r io.Reader) (msgs []codeMessage) {
 		lineNumber, _ := strconv.Atoi(splits[1])
 		msgs = append(msgs, codeMessage{
 			File: filepath.Join(dir, filename),
-			Line: lineNumber + 1,
+			Line: lineNumber,
 			Msg:  msg,
 		})
 	}

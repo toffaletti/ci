@@ -25,8 +25,9 @@ func handlePullRequest(pre *PullRequestEvent) {
 		if pre.Action == "synchronize" {
 			env.CleanComments()
 		}
-		env.Build()
+		env.Check()
 		env.Report()
+		env.Clean()
 	case "closed":
 	case "reopened":
 	}

@@ -4,9 +4,60 @@ import (
 	"bytes"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"runtime"
 	"testing"
 )
+
+var checkTests = []struct {
+	name     string
+	expected []codeMessage
+}{
+	{
+		"badfmt",
+		[]codeMessage{
+			{File: "main.go", Line: 4, Msg: "needs gofmt", Ok: false},
+			{File: "", Line: 0, Msg: "# _\n./main.go:4: i declared and not used\n", Ok: false},
+		},
+	},
+	{
+		"vetfail",
+		[]codeMessage{
+			{File: "foo.go", Line: 4, Msg: "struct field tag `json:bad\"` not compatible with reflect.StructTag.Get", Ok: false},
+			{File: "", Line: 0, Msg: "?   \t_\t[no test files]\n", Ok: true}},
+	},
+	{
+		"missing",
+		nil,
+	},
+	{
+		"allok",
+		[]codeMessage{
+			{File: "", Line: 0, Msg: "PASS\ncoverage: 100.0% of statements\nok  \t_\t\n", Ok: true},
+		},
+	},
+}
+
+func TestCheck(t *testing.T) {
+	var timeFilterRe = regexp.MustCompile(`[0-9]+\.[0-9]+s`)
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("couldn't find filename")
+	}
+	for i, tt := range checkTests {
+		e := NewTestEnv(filepath.Join(filepath.Dir(filename), "_testdata", tt.name))
+		e.Check()
+		t.Logf("reports: %#v", e.reports)
+		// filter out test timings
+		for i, r := range e.reports {
+			e.reports[i].Msg = timeFilterRe.ReplaceAllString(r.Msg, "")
+		}
+		if !reflect.DeepEqual(e.reports, tt.expected) {
+			t.Errorf("%v. expected: %v got: %v", i, tt.expected, e.reports)
+		}
+	}
+}
 
 func TestMakeTree(t *testing.T) {
 	_, filename, _, ok := runtime.Caller(0)
@@ -54,12 +105,11 @@ func TestVetOutParse(t *testing.T) {
 	if len(msgs) != 2 {
 		t.Error("expecting 2 messages")
 	}
-	// expect lineNumber+1 to put comment under the line in github ui
-	if msgs[0].Line != 242 {
-		t.Errorf("expecting line 242")
+	if msgs[0].Line != 241 {
+		t.Errorf("expecting line 241")
 	}
-	if msgs[1].Line != 35 {
-		t.Errorf("expecting line 35")
+	if msgs[1].Line != 34 {
+		t.Errorf("expecting line 34")
 	}
 }
 
@@ -81,4 +131,5 @@ src/github.com/rlee/ml.git/optimizers/logistic_regression_test.go:78: TestExactS
 	if len(msgs) != 1 {
 		t.Errorf("expecting one msg, got %v", len(msgs))
 	}
+	// TODO: this test is bad
 }
