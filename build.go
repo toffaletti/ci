@@ -74,12 +74,21 @@ func (e *BuildEnv) Clone() (err error) {
 	// TODO: check err for MkdirAll
 	glog.V(1).Infof("cloning to %v", dir)
 	//c := e.Command("git", "clone", "--quiet", "-b", e.pr.Head.Ref, "--single-branch", e.pr.Head.Repo.CloneUrl)
-	// XXX: had to stop doing --single-branch because go get -u runs 'git checkout master'
-	c := e.Command("git", "clone", "--quiet", "-b", e.pr.Head.Ref, e.pr.Head.Repo.CloneUrl)
+	c := e.Command("git", "clone", "--single-branch", "--quiet", "-b", e.pr.Head.Ref, e.pr.Head.Repo.CloneUrl)
 	c.Dir = dir
 	err = c.Run()
 	if err != nil {
 		glog.V(1).Infof("error cloning: %v", err)
+	}
+	// go get -u runs 'git checkout master'
+	// so we're going to create a fake master since --single-branch might mean we don't have master branch
+	if e.pr.Head.Ref != "master" {
+		c := e.Command("git", "branch", "master")
+		c.Dir = e.root
+		err = c.Run()
+		if err != nil {
+			glog.V(1).Infof("error making fake master: %v", err)
+		}
 	}
 	return err
 }
