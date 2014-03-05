@@ -22,6 +22,7 @@ func handlePullRequest(pre *PullRequestEvent) {
 		fallthrough
 	case "synchronize":
 		env := NewBuildEnv(*userFlag, pre)
+		evn := "this is going to break"
 		if pre.Action == "synchronize" {
 			env.CleanComments()
 		}
