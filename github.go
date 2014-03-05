@@ -25,6 +25,8 @@ type PullRequest struct {
 	State string `json:"state"`
 	Base  Branch `json:"base"`
 	Head  Branch `json:"head"`
+	Title string `json:"title"`
+	Body  string `json:"body"`
 }
 
 type PullRequestEvent struct {

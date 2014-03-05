@@ -62,3 +62,23 @@ func TestVetOutParse(t *testing.T) {
 		t.Errorf("expecting line 35")
 	}
 }
+
+func TestBuildOutParse(t *testing.T) {
+	out := `
+src/github.com/rlee/ml.git/optimizers/logistic_regression_test.go:11: AssertMatrix redeclared in this block
+    previous declaration at src/github.com/rlee/ml.git/optimizers/linear_regression_test.go:11
+src/github.com/rlee/ml.git/optimizers/logistic_regression_test.go:22: AssertOptimizerWeights redeclared in this block
+    previous declaration at src/github.com/rlee/ml.git/optimizers/linear_regression_test.go:22
+src/github.com/rlee/ml.git/optimizers/logistic_regression_test.go:45: generateTestData redeclared in this block
+    previous declaration at src/github.com/rlee/ml.git/optimizers/linear_regression_test.go:45
+src/github.com/rlee/ml.git/optimizers/logistic_regression_test.go:69: TestExactSlope redeclared in this block
+    previous declaration at src/github.com/rlee/ml.git/optimizers/linear_regression_test.go:69
+src/github.com/rlee/ml.git/optimizers/logistic_regression_test.go:78: TestExactSlopeWithOffset redeclared in this block
+    previous declaration at src/github.com/rlee/ml.git/optimizers/linear_regression_test.go:78
+    `
+	msgs := parseBuildOut("src/github.com/rlee/ml.git/", out)
+	t.Logf("msgs: %v", msgs)
+	if len(msgs) != 1 {
+		t.Errorf("expecting one msg, got %v", len(msgs))
+	}
+}

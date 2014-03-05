@@ -120,6 +120,18 @@ func (e *BuildEnv) Report() {
 	if allOk {
 		os.RemoveAll(e.GoPaths[1])
 		log.Printf("all files ok")
+	} else if e.pre.PullRequest.State != "closed" {
+		// close the pull request
+		closed := "closed"
+		pr := &github.PullRequest{
+			Title: &e.pr.Title,
+			Body:  &e.pr.Body,
+			State: &closed,
+		}
+		_, _, err := ghClient.PullRequests.Edit(e.pr.Base.Repo.Owner.Login, e.pr.Base.Repo.Name, e.pre.Number, pr)
+		if err != nil {
+			log.Printf("error closing pull request: %v", err)
+		}
 	}
 }
 
@@ -248,23 +260,7 @@ func (e *BuildEnv) build(dirs map[string][]string) (msgs []codeMessage, buildPas
 		if err != nil {
 			log.Printf("error running go build: %v", err)
 			buildPass = false
-			splits := strings.SplitN(string(out), "\n", 3)
-			if len(splits) == 3 {
-				//pkgPath := splits[0][2:]
-				splits := strings.SplitN(splits[1], ": ", 2)
-				if len(splits) == 2 {
-					errMsg := splits[1]
-					splits = strings.SplitN(splits[0], ":", 2)
-					if len(splits) == 2 {
-						lineNumber, _ := strconv.Atoi(splits[1])
-						msgs = append(msgs, codeMessage{
-							Line: lineNumber + 1,
-							File: filepath.Join(dir, splits[0]),
-							Msg:  errMsg,
-						})
-					}
-				}
-			}
+			msgs = append(msgs, parseBuildOut(dir, string(out))...)
 		}
 		// TODO: parse output to go build and comment on first line that fails to build
 		//msgs = append(msgs, codeMessage{
@@ -331,35 +327,21 @@ func (e *BuildEnv) processDir(path string) (msgs []codeMessage, err error) {
 }
 
 func codeComment(pre *PullRequestEvent, msgs []codeMessage) error {
-	pr := pre.PullRequest
 	// TODO: git blame -p -L 241,241 ci.go
 	// to get the correct commit
-	var success []string
+	var comments []string
 	for _, m := range msgs {
-		if m.Ok {
-			success = append(success, strings.TrimSpace(m.Msg))
-			continue
-		}
-		commentBody := fmt.Sprintf("```\n%s\n```", strings.TrimSpace(m.Msg))
-		var err error
-		if m.Line != 0 {
-			prc := &github.PullRequestComment{
-				Body:     &commentBody,
-				CommitID: &pr.Head.Sha,
-				Path:     &m.File,
-				Position: &m.Line,
-			}
-			_, _, err = ghClient.PullRequests.CreateComment(pr.Base.Repo.Owner.Login, pr.Base.Repo.Name, pre.Number, prc)
-		} else {
-			err = issueComment(pre, commentBody)
-		}
-		if err != nil {
-			return err
+		if m.File != "" && m.Line > 0 {
+			comments = append(comments, fmt.Sprintf("%v:%v: %v", m.File, m.Line, strings.TrimSpace(m.Msg)))
+		} else if m.File != "" {
+			comments = append(comments, fmt.Sprintf("%v: %v", m.File, strings.TrimSpace(m.Msg)))
+		} else if m.Msg != "" {
+			comments = append(comments, strings.TrimSpace(m.Msg))
 		}
 	}
-	if len(success) > 0 {
+	if len(comments) > 0 {
 		// put inside markdown code block to prevent it from being interpreted as markdwon
-		commentBody := fmt.Sprintf("```\n%s\n```", strings.Join(success, "\n"))
+		commentBody := fmt.Sprintf("```\n%s\n```", strings.Join(comments, "\n"))
 		err := issueComment(pre, commentBody)
 		if err != nil {
 			return err
@@ -375,6 +357,32 @@ func issueComment(pre *PullRequestEvent, commentBody string) error {
 	}
 	_, _, err := ghClient.Issues.CreateComment(pr.Base.Repo.Owner.Login, pr.Base.Repo.Name, pre.Number, comment)
 	return err
+}
+
+func parseBuildOut(dir string, out string) (msgs []codeMessage) {
+	// TODO: don't care about line numbers until github improves pull request comments
+	//splits := strings.SplitN(string(out), "\n", 3)
+	//if len(splits) == 3 {
+	//	//pkgPath := splits[0][2:]
+	//	splits := strings.SplitN(splits[1], ": ", 2)
+	//	if len(splits) == 2 {
+	//		errMsg := splits[1]
+	//		splits = strings.SplitN(splits[0], ":", 2)
+	//		if len(splits) == 2 {
+	//			lineNumber, _ := strconv.Atoi(splits[1])
+	//			msgs = append(msgs, codeMessage{
+	//				Line: lineNumber + 1,
+	//				File: filepath.Join(dir, splits[0]),
+	//				Msg:  errMsg,
+	//			})
+	//		}
+	//	}
+	//}
+
+	msgs = append(msgs, codeMessage{
+		Msg: strings.Replace(out, dir, "", -1),
+	})
+	return
 }
 
 func parseVetOut(dir string, r io.Reader) (msgs []codeMessage) {
