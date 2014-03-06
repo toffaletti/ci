@@ -1,12 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -35,6 +35,13 @@ var checkTests = []struct {
 		"allok",
 		[]codeMessage{
 			{File: "", Line: 0, Msg: "PASS\ncoverage: 100.0% of statements\nok  \t_\t\n", Ok: true},
+		},
+	},
+	{
+		"parsefail",
+		[]codeMessage{
+			{File: "foo.go", Line: 3, Msg: "expected '(', found newline", Ok: false},
+			{File: "", Line: 0, Msg: "# _\n./foo.go:3: syntax error: unexpected semicolon or newline, expecting (\n", Ok: false},
 		},
 	},
 }
@@ -101,7 +108,7 @@ func TestExecError(t *testing.T) {
 func TestVetOutParse(t *testing.T) {
 	out := "search.go:241: range variable domain enclosed by function\n" +
 		"ci.go:34:2: struct field tag `json\"owner\"` not compatible with reflect.StructTag.Get\n"
-	msgs := parseVetOut("", bytes.NewReader([]byte(out)))
+	msgs := parseVetOut("", strings.NewReader(out))
 	if len(msgs) != 2 {
 		t.Error("expecting 2 messages")
 	}
