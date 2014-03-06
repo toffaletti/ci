@@ -86,6 +86,6 @@ func main() {
 			go handleEvent(event, raw)
 		}
 	})
-	glog.Info("listening on port %v", *port)
+	glog.Infof("listening on port %v", *port)
 	http.ListenAndServe(fmt.Sprintf(":%v", *port), nil)
 }
