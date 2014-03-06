@@ -44,6 +44,13 @@ var checkTests = []struct {
 			{File: "", Line: 0, Msg: "# _\n./foo.go:3: syntax error: unexpected semicolon or newline, expecting (\n", Ok: false},
 		},
 	},
+	{
+		"onlyfmt",
+		[]codeMessage{
+			{File: "hi.go", Line: 4, Msg: "needs gofmt", Ok: false},
+			{File: "", Line: 0, Msg: "?   \t_\t[no test files]\n", Ok: true},
+		},
+	},
 }
 
 func TestCheck(t *testing.T) {
@@ -117,6 +124,19 @@ func TestVetOutParse(t *testing.T) {
 	}
 	if msgs[1].Line != 34 {
 		t.Errorf("expecting line 34")
+	}
+}
+
+func TestParseDiff(t *testing.T) {
+	out := `:6:     "encoding/base64"
+    "encoding/base64"`
+	lineNumber, err := parseDiff(strings.NewReader(out))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if lineNumber != 6 {
+		t.Errorf("expected 6, got %v", lineNumber)
 	}
 }
 
