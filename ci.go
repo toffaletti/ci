@@ -4,9 +4,9 @@ import (
 	"code.google.com/p/goauth2/oauth"
 	"encoding/json"
 	"flag"
+	"github.com/golang/glog"
 	"github.com/google/go-github/github"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"os"
 )
@@ -25,8 +25,10 @@ func handlePullRequest(pre *PullRequestEvent) {
 		if pre.Action == "synchronize" {
 			env.CleanComments()
 		}
-		env.Build()
+		env.Clone()
+		env.Check()
 		env.Report()
+		env.Clean()
 	case "closed":
 	case "reopened":
 	}
@@ -38,15 +40,18 @@ func handleEvent(event string, body json.RawMessage) {
 		pre := &PullRequestEvent{}
 		err := json.Unmarshal(body, pre)
 		if err != nil {
-			log.Printf("json error for pr: %v", err)
+			glog.Errorf("json error for pr: %v", err)
 		}
 		handlePullRequest(pre)
 	default:
-		log.Printf("event: %v body: %v", event, string(body))
+		glog.V(1).Infof("event: %v body: %v", event, string(body))
 	}
 }
 
 func main() {
+	f := flag.Lookup("logtostderr")
+	f.DefValue = "true"
+	flag.Set("logtostderr", "true")
 	flag.Parse()
 	if *userFlag == "" || *authFlag == "" {
 		flag.PrintDefaults()
@@ -59,7 +64,7 @@ func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		data, err := ioutil.ReadAll(r.Body)
 		if err != nil {
-			log.Printf("error reading body %v", err)
+			glog.Errorf("error reading body %v", err)
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -67,7 +72,7 @@ func main() {
 		event := r.Header.Get("X-Github-Event")
 		switch event {
 		case "":
-			log.Printf("got unknown request")
+			glog.Info("got unknown request")
 			r.Write(os.Stderr)
 			return
 		default:
@@ -79,6 +84,6 @@ func main() {
 			go handleEvent(event, raw)
 		}
 	})
-	log.Print("listening on port 1980")
+	glog.Info("listening on port 1980")
 	http.ListenAndServe(":1980", nil)
 }
