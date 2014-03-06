@@ -295,7 +295,7 @@ func (e *BuildEnv) build(dirs map[string][]string) (msgs []codeMessage, buildPas
 		// after running go get -u we will be on branch master
 		// need to checkout the right branch
 		c := e.Command("git", "checkout", e.pr.Head.Ref)
-		c.Dir = filepath.Join(filepath.Dir(e.root), e.pr.Head.Repo.Name)
+		c.Dir = e.root
 		out, err := c.CombinedOutput()
 		if err != nil {
 			glog.V(1).Infof("error checking out branch: %v", string(out))
