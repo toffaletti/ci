@@ -9,7 +9,9 @@ import (
 	"github.com/google/go-github/github"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 )
 
 // TODO: might need one of these per build-env in the future
@@ -54,6 +56,9 @@ func main() {
 	f.DefValue = "true"
 	flag.Set("logtostderr", "true")
 	port := flag.Int("p", 1980, "listening port")
+	register := flag.String("register", "", "register hook for repo")
+	base := flag.String("base", "", "base github url")
+	vhost := flag.String("vhost", "", "vhost for this server")
 	flag.Parse()
 	if *userFlag == "" || *authFlag == "" {
 		flag.PrintDefaults()
@@ -63,6 +68,52 @@ func main() {
 		Token: &oauth.Token{AccessToken: *authFlag},
 	}
 	ghClient = github.NewClient(t.Client())
+	if *base != "" {
+		u, err := url.Parse(*base)
+		if err != nil {
+			panic(err)
+		}
+		ghClient.BaseURL = u
+	}
+	if *register != "" {
+		if *vhost == "" {
+			panic("must set vhost")
+		}
+		u, err := url.Parse(*register)
+		if err != nil {
+			panic(err)
+		}
+		if u.Host != "github.com" {
+			ghClient.BaseURL = &url.URL{
+				Scheme: u.Scheme,
+				Host:   u.Host,
+				Path:   "/api/v3/",
+			}
+			name := "web"
+			active := true
+			config := map[string]interface{}{
+				"url":          fmt.Sprintf("http://%v:%v/", *vhost, *port),
+				"content_type": "json",
+			}
+			hook := &github.Hook{
+				Name:   &name,
+				Events: []string{"pull_request"},
+				Config: config,
+				Active: &active,
+			}
+			splits := strings.SplitN(u.Path, "/", 3)
+			owner := splits[1]
+			repo := splits[2]
+			_, resp, err := ghClient.Repositories.CreateHook(owner, repo, hook)
+			if err != nil {
+				glog.V(2).Infof("%#v", resp.Response)
+				glog.V(2).Infof("%#v", resp.Response.Request)
+				panic(err)
+			}
+		}
+		return
+	}
+
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		data, err := ioutil.ReadAll(r.Body)
 		if err != nil {
@@ -78,6 +129,7 @@ func main() {
 			r.Write(os.Stderr)
 			return
 		default:
+			glog.V(3).Infof("request: %#v", *r)
 			raw := json.RawMessage{}
 			err = raw.UnmarshalJSON(data)
 			if err != nil {
