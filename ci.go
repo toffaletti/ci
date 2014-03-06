@@ -4,6 +4,7 @@ import (
 	"code.google.com/p/goauth2/oauth"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"github.com/golang/glog"
 	"github.com/google/go-github/github"
 	"io/ioutil"
@@ -52,6 +53,7 @@ func main() {
 	f := flag.Lookup("logtostderr")
 	f.DefValue = "true"
 	flag.Set("logtostderr", "true")
+	port := flag.Int("-p", 1980, "listening port")
 	flag.Parse()
 	if *userFlag == "" || *authFlag == "" {
 		flag.PrintDefaults()
@@ -84,6 +86,6 @@ func main() {
 			go handleEvent(event, raw)
 		}
 	})
-	glog.Info("listening on port 1980")
-	http.ListenAndServe(":1980", nil)
+	glog.Info("listening on port %v", *port)
+	http.ListenAndServe(fmt.Sprintf(":%v", *port), nil)
 }
