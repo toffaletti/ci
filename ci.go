@@ -53,7 +53,7 @@ func main() {
 	f := flag.Lookup("logtostderr")
 	f.DefValue = "true"
 	flag.Set("logtostderr", "true")
-	port := flag.Int("-p", 1980, "listening port")
+	port := flag.Int("p", 1980, "listening port")
 	flag.Parse()
 	if *userFlag == "" || *authFlag == "" {
 		flag.PrintDefaults()
