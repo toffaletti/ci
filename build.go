@@ -79,9 +79,8 @@ func (e *BuildEnv) Clone() (err error) {
 	os.RemoveAll(e.GoPaths[1])
 	err = os.MkdirAll(dir, os.ModePerm)
 	// TODO: check err for MkdirAll
-	glog.V(1).Infof("cloning to %v from: %v", dir, e.pr.Head.Repo.CloneUrl)
-	//c := e.Command("git", "clone", "--quiet", "-b", e.pr.Head.Ref, "--single-branch", e.pr.Head.Repo.CloneUrl)
-	c := e.Command("git", "clone", "--single-branch", "--quiet", "-b", e.pr.Head.Ref, e.pr.Head.Repo.CloneUrl)
+	glog.V(1).Infof("cloning to %v from: %v", e.root, e.pr.Head.Repo.CloneUrl)
+	c := e.Command("git", "clone", "--single-branch", "--quiet", "-b", e.pr.Head.Ref, e.pr.Head.Repo.CloneUrl, e.root)
 	c.Dir = dir
 	err = c.Run()
 	if err != nil {
