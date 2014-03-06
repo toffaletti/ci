@@ -204,7 +204,7 @@ func (e *BuildEnv) processFile(path string) (*codeMessage, error) {
 		lineNumber, err := e.findFirstChange(path, path+".fmt")
 		// TODO: show correct fmt?
 		if err != nil {
-			return nil, fmt.Errorf("%v needs gofmt", filepath.Base(path))
+			glog.V(1).Infof("error finding change: %v", err)
 		}
 		return &codeMessage{
 			File: path,
@@ -231,18 +231,24 @@ func (e *Environment) findFirstChange(f1 string, f2 string) (lineNumber int, err
 		//}
 		//return nil, fmt.Errorf("error running diff %v", err)
 	}
-	splits := strings.SplitN(string(out), "\n", 2)
-	if len(splits) != 2 {
-		err = errors.New("error parsing diff splits != 2")
-		return
+	return parseDiff(bytes.NewReader(out))
+}
+
+func parseDiff(r io.Reader) (lineNumber int, err error) {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		line := scanner.Text()
+		splits := strings.SplitN(line, ":", 3)
+		if len(splits) != 3 {
+			continue
+		}
+		lineNumber, err = strconv.Atoi(splits[1])
+		if err != nil {
+			continue
+		}
+		return lineNumber, nil
 	}
-	splits = strings.SplitN(splits[1], ":", 3)
-	if len(splits) != 3 {
-		err = errors.New("error parsing diff splits != 3")
-		return
-	}
-	lineNumber, err = strconv.Atoi(splits[1])
-	return
+	return 0, errors.New("no change found in diff")
 }
 
 func makeTree(dir string) (dirs map[string][]string, err error) {
