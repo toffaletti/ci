@@ -353,7 +353,7 @@ func (e *BuildEnv) processDir(path string) (msgs []codeMessage, err error) {
 	// go test packages
 	if buildPass {
 		for dir, _ := range dirs {
-			c := e.Command("go", "test", "-cover")
+			c := e.Command("go", "test", "-short", "-cover")
 			c.Dir = dir
 			out, err := c.CombinedOutput()
 			if err != nil {
