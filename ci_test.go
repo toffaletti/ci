@@ -10,6 +10,15 @@ import (
 	"testing"
 )
 
+var rootTests = []struct {
+	in  string
+	out string
+}{
+	{"https://github.com/toffaletti/ci", "src/github.com/toffaletti/ci"},
+	{"https://github.com/toffaletti/ci.git", "src/github.com/toffaletti/ci"},
+	{"https://example.com/toffaletti/ci.git", "src/example.com/toffaletti/ci.git"},
+}
+
 var checkTests = []struct {
 	name     string
 	expected []codeMessage
@@ -159,4 +168,13 @@ src/github.com/rlee/ml.git/optimizers/logistic_regression_test.go:78: TestExactS
 		t.Errorf("expecting one msg, got %v", len(msgs))
 	}
 	// TODO: this test is bad
+}
+
+func TestRootForUrl(t *testing.T) {
+	for i, tt := range rootTests {
+		out := rootForUrl("", tt.in)
+		if tt.out != out {
+			t.Errorf("%v. expected %v got %v", i, tt.out, out)
+		}
+	}
 }
