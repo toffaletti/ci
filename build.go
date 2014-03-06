@@ -38,7 +38,6 @@ type BuildEnv struct {
 }
 
 func NewBuildEnv(user string, pre *PullRequestEvent) *BuildEnv {
-	u, _ := url.Parse(pre.PullRequest.Base.Repo.CloneUrl)
 	sharedGoPath := filepath.Join("/tmp", "ci", "go")
 	dir := filepath.Join("/tmp", "ci", pre.PullRequest.Head.Sha)
 	return &BuildEnv{
@@ -46,9 +45,17 @@ func NewBuildEnv(user string, pre *PullRequestEvent) *BuildEnv {
 		pre:         pre,
 		pr:          &pre.PullRequest,
 		fileSet:     token.NewFileSet(),
-		root:        filepath.Join(dir, "src", u.Host, filepath.Dir(u.Path), pre.PullRequest.Head.Repo.Name),
+		root:        rootForUrl(dir, pre.PullRequest.Base.Repo.CloneUrl),
 		user:        user,
 	}
+}
+
+func rootForUrl(dir string, cloneUrl string) string {
+	u, _ := url.Parse(cloneUrl)
+	if u.Host == "github.com" && filepath.Ext(u.Path) == ".git" {
+		u.Path = u.Path[:len(u.Path)-4]
+	}
+	return filepath.Join(dir, "src", u.Host, u.Path)
 }
 
 func NewTestEnv(path string) *BuildEnv {
