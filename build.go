@@ -1,9 +1,7 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
-	"errors"
 	"fmt"
 	"github.com/golang/glog"
 	"github.com/google/go-github/github"
@@ -11,12 +9,10 @@ import (
 	"go/parser"
 	"go/printer"
 	"go/token"
-	"io"
 	"io/ioutil"
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -103,8 +99,10 @@ func (e *BuildEnv) Check() (err error) {
 	msgs, err := e.processDir(e.root)
 	// make file comment paths relative to repo root
 	for i, m := range msgs {
-		rel, _ := filepath.Rel(e.root, m.File)
-		msgs[i].File = rel
+		if m.File != "" {
+			rel, _ := filepath.Rel(e.root, m.File)
+			msgs[i].File = rel
+		}
 		msgs[i].Msg = strings.Replace(m.Msg, e.root, "", -1)
 	}
 	e.reports = msgs
@@ -173,130 +171,19 @@ func (e *BuildEnv) Clean() error {
 	return nil
 }
 
-func (e *BuildEnv) processFile(path string) (*codeMessage, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	src, err := ioutil.ReadAll(f)
-	if err != nil {
-		return nil, err
-	}
-	file, err := parser.ParseFile(e.fileSet, path, src, parser.ParseComments)
-	if err != nil {
-		msgs := parseVetOut("", strings.NewReader(err.Error()))
-		if len(msgs) > 0 {
-			return &msgs[0], nil
-		}
-		return nil, err
-	}
-	ast.SortImports(e.fileSet, file)
-	var buf bytes.Buffer
-	pc := &printer.Config{
-		Mode:     printer.UseSpaces | printer.TabIndent,
-		Tabwidth: 8,
-	}
-	err = pc.Fprint(&buf, e.fileSet, file)
-	if err != nil {
-		return nil, err
-	}
-	res := buf.Bytes()
-	if !bytes.Equal(src, res) {
-		// formatting changed, save file and run diff on it to find the first changed block
-		// use the line number from the diff to comment on the pull request
-		ioutil.WriteFile(path+".fmt", res, os.ModePerm)
-		defer os.Remove(path + ".fmt")
-		lineNumber, err := e.findFirstChange(path, path+".fmt")
-		// TODO: show correct fmt?
-		if err != nil {
-			glog.V(1).Infof("error finding change: %v", err)
-		}
-		return &codeMessage{
-			File: path,
-			Line: lineNumber,
-			Msg:  "needs gofmt",
-		}, nil
-	}
-	return nil, nil
-}
-
-func (e *Environment) findFirstChange(f1 string, f2 string) (lineNumber int, err error) {
-	args := []string{
-		"--unchanged-line-format=\"\"",
-		"--new-line-format=\":%dn: %L\"",
-		f1,
-		f2,
-	}
-	c := e.Command("diff", args...)
-	out, err := c.CombinedOutput()
-	if err != nil {
-		// TODO: exit status 1 is expected, but other errors arent
-		//if len(out) > 0 {
-		//	log.Printf("error running diff: %s", string(out))
-		//}
-		//return nil, fmt.Errorf("error running diff %v", err)
-	}
-	return parseDiff(bytes.NewReader(out))
-}
-
-func parseDiff(r io.Reader) (lineNumber int, err error) {
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		line := scanner.Text()
-		splits := strings.SplitN(line, ":", 3)
-		if len(splits) != 3 {
-			continue
-		}
-		lineNumber, err = strconv.Atoi(splits[1])
-		if err != nil {
-			continue
-		}
-		return lineNumber, nil
-	}
-	return 0, errors.New("no change found in diff")
-}
-
-func makeTree(dir string) (dirs map[string][]string, err error) {
-	dirs = make(map[string][]string)
-	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if c := info.Name()[0]; c == '.' || c == '_' {
-			return filepath.SkipDir
-		}
-		if info.Mode()&os.ModeType == 0 {
-			// regular file
-			if ok, _ := filepath.Match("*.go", info.Name()); ok {
-				dir := filepath.Dir(path)
-				if files, ok := dirs[dir]; ok {
-					dirs[dir] = append(files, info.Name())
-				} else {
-					dirs[dir] = []string{info.Name()}
-				}
-			}
-		}
-		return nil
-	})
-	return
-}
-
-func (e *BuildEnv) build(dirs map[string][]string) (msgs []codeMessage, buildPass bool) {
+func (e *BuildEnv) build() (msgs []codeMessage, buildPass bool) {
 	if e.pr != nil {
-		for dir, _ := range dirs {
-			c := e.Command("go", "get", "-d", "-u", "-t")
-			c.Dir = dir
-			out, err := c.CombinedOutput()
-			if err != nil {
-				glog.V(1).Infof("error running go get: %s", string(out))
-			}
+		c := e.Command("go", "get", "-d", "-u", "-t", "./...")
+		c.Dir = e.root
+		out, err := c.CombinedOutput()
+		if err != nil {
+			glog.V(1).Infof("error running go get: %s", string(out))
 		}
 		// after running go get -u we will be on branch master
 		// need to checkout the right branch
-		c := e.Command("git", "checkout", e.pr.Head.Ref)
+		c = e.Command("git", "checkout", e.pr.Head.Ref)
 		c.Dir = e.root
-		out, err := c.CombinedOutput()
+		out, err = c.CombinedOutput()
 		if err != nil {
 			glog.V(1).Infof("error checking out branch: %v", string(out))
 		}
@@ -304,40 +191,37 @@ func (e *BuildEnv) build(dirs map[string][]string) (msgs []codeMessage, buildPas
 
 	// go build packages
 	buildPass = true
-	for dir, _ := range dirs {
-		c := e.Command("go", "build")
-		c.Dir = dir
-		out, err := c.CombinedOutput()
-		if err != nil {
-			glog.V(1).Infof("error running go build: %v", err)
-			buildPass = false
-			msgs = append(msgs, parseBuildOut(dir, string(out))...)
-		}
-		// TODO: parse output to go build and comment on first line that fails to build
-		//msgs = append(msgs, codeMessage{
-		//	Msg: string(out),
-		//	Ok:  err == nil,
-		//})
+	c := e.Command("go", "build", "./...")
+	c.Dir = e.root
+	out, err := c.CombinedOutput()
+	if err != nil {
+		glog.V(1).Infof("error running go build: %v", err)
+		buildPass = false
+		msgs = append(msgs, codeMessage{
+			Msg: string(out),
+		})
 	}
 	return
 }
 
 func (e *BuildEnv) processDir(path string) (msgs []codeMessage, err error) {
-	dirs, err := makeTree(path)
+	dirs, err := makeTree(e.root)
 	if err != nil {
 		return
 	}
+
 	// run go vet on each package directory
-	for dir, _ := range dirs {
-		c := e.Command("go", "vet")
-		c.Dir = dir
-		out, err := c.CombinedOutput()
-		if err != nil {
-			//return nil, fmt.Errorf("error running go vet %v", err)
-		}
-		if len(out) > 0 {
-			msgs = parseVetOut(dir, bytes.NewReader(out))
-		}
+	c := e.Command("go", "vet", "./...")
+	c.Dir = e.root
+	out, err := c.CombinedOutput()
+	if err != nil {
+		//return nil, fmt.Errorf("error running go vet %v", err)
+		glog.V(1).Infof("error running go vet: %v", err)
+	}
+	if len(out) > 0 {
+		msgs = append(msgs, codeMessage{
+			Msg: fmt.Sprintf("go vet errors:\n%s", string(out)),
+		})
 	}
 
 	// process files with gofmt-like logic
@@ -345,7 +229,8 @@ func (e *BuildEnv) processDir(path string) (msgs []codeMessage, err error) {
 		for _, file := range files {
 			msg, err := e.processFile(filepath.Join(dir, file))
 			if err != nil {
-				return nil, err
+				glog.V(1).Infof("error processing file: %v", err)
+				continue
 			}
 			if msg != nil {
 				msgs = append(msgs, *msg)
@@ -353,24 +238,23 @@ func (e *BuildEnv) processDir(path string) (msgs []codeMessage, err error) {
 		}
 	}
 
-	m, buildPass := e.build(dirs)
+	m, buildPass := e.build()
 	msgs = append(msgs, m...)
 
 	// go test packages
 	if buildPass {
-		for dir, _ := range dirs {
-			c := e.Command("go", "test", "-short", "-cover")
-			c.Dir = dir
-			out, err := c.CombinedOutput()
-			if err != nil {
-				glog.V(1).Infof("error running go test: %v", err)
-			}
-			msgs = append(msgs, codeMessage{
-				Msg: string(out),
-				Ok:  err == nil,
-			})
+		c := e.Command("go", "test", "-short", "-cover", "./...")
+		c.Dir = e.root
+		out, err := c.CombinedOutput()
+		if err != nil {
+			glog.V(1).Infof("error running go test: %v", err)
 		}
+		msgs = append(msgs, codeMessage{
+			Msg: string(out),
+			Ok:  err == nil,
+		})
 	}
+	glog.V(1).Infof("msgs: %#v", msgs)
 	return msgs, nil
 }
 
@@ -407,52 +291,64 @@ func issueComment(pre *PullRequestEvent, commentBody string) error {
 	return err
 }
 
-func parseBuildOut(dir string, out string) (msgs []codeMessage) {
-	// TODO: don't care about line numbers until github improves pull request comments
-	//splits := strings.SplitN(string(out), "\n", 3)
-	//if len(splits) == 3 {
-	//	//pkgPath := splits[0][2:]
-	//	splits := strings.SplitN(splits[1], ": ", 2)
-	//	if len(splits) == 2 {
-	//		errMsg := splits[1]
-	//		splits = strings.SplitN(splits[0], ":", 2)
-	//		if len(splits) == 2 {
-	//			lineNumber, _ := strconv.Atoi(splits[1])
-	//			msgs = append(msgs, codeMessage{
-	//				Line: lineNumber,
-	//				File: filepath.Join(dir, splits[0]),
-	//				Msg:  errMsg,
-	//			})
-	//		}
-	//	}
-	//}
-
-	msgs = append(msgs, codeMessage{
-		Msg: out,
+func makeTree(dir string) (dirs map[string][]string, err error) {
+	dirs = make(map[string][]string)
+	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if c := info.Name()[0]; c == '.' || c == '_' {
+			return filepath.SkipDir
+		}
+		if info.Mode()&os.ModeType == 0 {
+			// regular file
+			if ok, _ := filepath.Match("*.go", info.Name()); ok {
+				dir := filepath.Dir(path)
+				if files, ok := dirs[dir]; ok {
+					dirs[dir] = append(files, info.Name())
+				} else {
+					dirs[dir] = []string{info.Name()}
+				}
+			}
+		}
+		return nil
 	})
 	return
 }
 
-func parseVetOut(dir string, r io.Reader) (msgs []codeMessage) {
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		line := scanner.Text()
-		splits := strings.SplitN(string(line), ": ", 2)
-		if len(splits) != 2 {
-			continue
-		}
-		msg := splits[1]
-		splits = strings.Split(splits[0], ":")
-		if len(splits) < 2 {
-			continue
-		}
-		filename := splits[0]
-		lineNumber, _ := strconv.Atoi(splits[1])
-		msgs = append(msgs, codeMessage{
-			File: filepath.Join(dir, filename),
-			Line: lineNumber,
-			Msg:  msg,
-		})
+func (e *BuildEnv) processFile(path string) (*codeMessage, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
 	}
-	return
+	defer f.Close()
+	src, err := ioutil.ReadAll(f)
+	if err != nil {
+		return nil, err
+	}
+	file, err := parser.ParseFile(e.fileSet, path, src, parser.ParseComments)
+	if err != nil {
+		return &codeMessage{
+			Msg: err.Error(),
+		}, nil
+	}
+	ast.SortImports(e.fileSet, file)
+	var buf bytes.Buffer
+	pc := &printer.Config{
+		Mode:     printer.UseSpaces | printer.TabIndent,
+		Tabwidth: 8,
+	}
+	err = pc.Fprint(&buf, e.fileSet, file)
+	if err != nil {
+		return nil, err
+	}
+	res := buf.Bytes()
+	if !bytes.Equal(src, res) {
+		return &codeMessage{
+			File: path,
+			Line: 0,
+			Msg:  "needs gofmt",
+		}, nil
+	}
+	return nil, nil
 }
